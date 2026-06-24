@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # src/db.py
 # ─────────────────────────────────────────────────────────────────────────────
 # Neo4j connection wrapper. Import this in every module that needs database
@@ -6,8 +7,9 @@
 
 import os
 from typing import Optional
-from neo4j import GraphDatabase
+
 from dotenv import load_dotenv
+from neo4j import GraphDatabase
 
 load_dotenv()
 
@@ -19,13 +21,13 @@ class Neo4jConnection:
     The driver manages a pool of Bolt connections internally. One instance
     per application process is the recommended pattern.
 
-    Usage (as context manager — preferred):
+    Usage as a context manager:
         with Neo4jConnection() as db:
-            rows = db.read("MATCH (m:Movie) RETURN m.title AS title")
+            rows = db.read("MATCH (h:Hadith) RETURN h.auto_id AS id")
 
-    Usage (manual lifecycle):
+    Usage with manual lifecycle:
         db = Neo4jConnection()
-        db.write("MERGE (m:Movie {title: $title})", {"title": "Dangal"})
+        db.write("MERGE (n:Narrator {name: $name})", {"name": "أبو هريرة"})
         db.close()
     """
 
@@ -35,9 +37,9 @@ class Neo4jConnection:
         user: Optional[str] = None,
         password: Optional[str] = None,
     ):
-        _uri  = uri      or os.getenv("NEO4J_URI",      "bolt://localhost:7687")
-        _user = user     or os.getenv("NEO4J_USER",     "neo4j")
-        _pass = password or os.getenv("NEO4J_PASSWORD", "bollywood2024!")
+        _uri = uri or os.getenv("NEO4J_URI", "bolt://localhost:7687")
+        _user = user or os.getenv("NEO4J_USER", "neo4j")
+        _pass = password or os.getenv("NEO4J_PASSWORD", "neo4j")
 
         self._driver = GraphDatabase.driver(_uri, auth=(_user, _pass))
         self._driver.verify_connectivity()
@@ -49,12 +51,12 @@ class Neo4jConnection:
         self.close()
 
     def write(self, query: str, params: Optional[dict] = None) -> None:
-        """Execute a write query (MERGE, CREATE, SET, DELETE)."""
+        """Execute a write query."""
         with self._driver.session() as session:
             session.run(query, params or {})
 
     def read(self, query: str, params: Optional[dict] = None) -> list[dict]:
-        """Execute a read query and return results as a list of dicts."""
+        """Execute a read query and return results as a list of dictionaries."""
         with self._driver.session() as session:
             result = session.run(query, params or {})
             return [record.data() for record in result]
@@ -65,8 +67,8 @@ class Neo4jConnection:
 
         Example query:
             UNWIND $rows AS row
-            MERGE (m:Movie {title: row.title})
-            SET m.year = row.year
+            MERGE (h:Hadith {auto_id: row.auto_id})
+            SET h += row
         """
         total = 0
         with self._driver.session() as session:

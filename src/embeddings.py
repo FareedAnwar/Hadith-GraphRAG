@@ -1,98 +1,190 @@
 # src/embeddings.py
 # ─────────────────────────────────────────────────────────────────────────────
-# Computes OpenAI text embeddings for each graph node and stores them as
-# node properties. These embeddings power the vector search step in the
-# GraphRAG pipeline — when a user asks a question, we embed the question
-# and find the graph nodes most semantically similar to it.
+# Ollama embeddings for Hadith GraphRAG
+#
+# This version:
+#   - Embeds Narrator nodes only
+#   - Embedding text = narrator name only
+#   - Search returns Narrator nodes only
+#   - Uses elementId() instead of deprecated id()
+#   - Removes old embeddings from all nodes before creating narrator embeddings
 # ─────────────────────────────────────────────────────────────────────────────
 
 import os
 import json
+from typing import Any
+
+import httpx
 import numpy as np
-from openai import OpenAI
 from dotenv import load_dotenv
+
 from db import Neo4jConnection
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-EMBED_MODEL = "text-embedding-3-small"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text:latest")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Node → Natural Language Description
-# ─────────────────────────────────────────────────────────────────────────────
 
+def _first_value(props: dict, *keys: str, default: str = "") -> str:
+    """Return the first non-empty property value from possible keys."""
+    for key in keys:
+        value = props.get(key)
+        if value is not None and str(value).strip() != "":
+            return str(value).strip()
+    return default
+
+
+def narrator_to_text(props: dict) -> str:
+    """
+    Convert Narrator node to embedding text.
+
+    Important:
+    We embed the narrator name only.
+    """
+    return _first_value(
+        props,
+        "name",
+        "full_name",
+        "arabic_name",
+        default="Unknown narrator",
+    )
+
+
+# Keep this name because other files may import/use node_to_text
 def node_to_text(props: dict, label: str) -> str:
-    """
-    Convert a graph node into a natural language sentence for embedding.
-
-    The sentence should capture the node's most distinguishing properties so
-    that a question about this entity will match it via cosine similarity.
-    """
-    if label == "Movie":
-        return (
-            f"'{props.get('title')}' is a {props.get('genre', '')} Hindi film "
-            f"released in {props.get('year', '')}. "
-            f"{props.get('description', '')}"
-        )
-    if label == "Person":
-        return (
-            f"{props.get('name')} is an Indian {props.get('profession', 'film personality')} "
-            f"born in {props.get('born', '')} from {props.get('hometown', 'India')}."
-        )
-    if label == "ProductionHouse":
-        return (
-            f"{props.get('name')} is a Bollywood production house founded in "
-            f"{props.get('founded', '')} by {props.get('founder', 'unknown')}."
-        )
-    if label == "Award":
-        return (
-            f"The {props.get('name')} is a {props.get('category', '')} award "
-            f"presented in {props.get('year', '')} in Indian cinema."
-        )
-    return props.get("name", props.get("title", str(props)))
+    if label == "Narrator":
+        return narrator_to_text(props)
+    return ""
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Batch Embedding
-# ─────────────────────────────────────────────────────────────────────────────
+# Ollama Embedding Calls
+
+def embed_text(text: str) -> list[float]:
+    """Embed a single text using Ollama /api/embed."""
+    text = str(text).strip()
+
+    if not text:
+        raise ValueError("Cannot embed empty text.")
+
+    response = httpx.post(
+        f"{OLLAMA_BASE_URL}/api/embed",
+        json={
+            "model": EMBED_MODEL,
+            "input": text,
+        },
+        timeout=120,
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+    embeddings = data.get("embeddings")
+
+    if not embeddings:
+        raise RuntimeError(f"Ollama returned no embeddings. Response: {data}")
+
+    return embeddings[0]
+
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
-    """Call the OpenAI Embeddings API for a list of texts in one request."""
-    response = client.embeddings.create(input=texts, model=EMBED_MODEL)
-    return [item.embedding for item in response.data]
+    """Embed texts one by one using local Ollama."""
+    vectors = []
+
+    for index, text in enumerate(texts, start=1):
+        vectors.append(embed_text(text))
+
+        if index % 100 == 0:
+            print(f"  Embedded {index}/{len(texts)} narrators...")
+
+    return vectors
 
 
-def add_embeddings(db: Neo4jConnection) -> None:
+# ─────────────────────────────────────────────────────────────────────────────
+# Store Narrator Embeddings
+# ─────────────────────────────────────────────────────────────────────────────
+
+def clear_existing_embeddings(db: Neo4jConnection) -> None:
     """
-    Embed every node in the graph and store the vector as a JSON string property.
+    Remove old embeddings from all nodes.
 
-    Why JSON string? Neo4j Community Edition does not natively index float
-    arrays as vectors. We store as JSON and deserialise in Python for
-    similarity computation. For production scale, upgrade to Neo4j Enterprise
-    which supports native vector indexes and GPU-accelerated ANN search.
+    This is important if you previously embedded:
+        Hadith
+        HadithBook
+        HadithChapter
+        HadithPage
+        etc.
+
+    After this, only Narrator nodes will have embeddings.
     """
-    labels = ["Movie", "Person", "ProductionHouse", "Award"]
+    db.write("""
+        MATCH (n)
+        REMOVE n.embedding, n.embedding_text
+    """)
 
-    for label in labels:
-        rows = db.read(f"MATCH (n:{label}) RETURN n, id(n) AS nid")
-        if not rows:
-            print(f"  No {label} nodes found, skipping.")
+    print("  ✓ Old embeddings removed from all nodes")
+
+
+def add_embeddings(db: Neo4jConnection, clear_existing: bool = True) -> None:
+    """
+    Embed Narrator nodes only.
+
+    Stored properties:
+        n.embedding
+        n.embedding_text
+
+    embedding_text will contain narrator name only.
+    """
+    if clear_existing:
+        clear_existing_embeddings(db)
+
+    rows = db.read("""
+        MATCH (n:Narrator)
+        RETURN n, elementId(n) AS eid
+        ORDER BY n.name
+    """)
+
+    if not rows:
+        print("  No Narrator nodes found, skipping.")
+        return
+
+    texts = []
+    eids = []
+
+    for row in rows:
+        props = row["n"]
+        text = narrator_to_text(props)
+
+        if not text or text == "Unknown narrator":
             continue
 
-        texts   = [node_to_text(row["n"], label) for row in rows]
-        nids    = [row["nid"] for row in rows]
-        vectors = embed_batch(texts)
+        texts.append(text)
+        eids.append(row["eid"])
 
-        for nid, vec, txt in zip(nids, vectors, texts):
-            db.write("""
-                MATCH (n) WHERE id(n) = $nid
-                SET n.embedding      = $vec,
-                    n.embedding_text = $txt
-            """, {"nid": nid, "vec": json.dumps(vec), "txt": txt})
+    print(f"  Found {len(texts)} narrators to embed")
 
-        print(f"  ✓ {len(rows):>3} {label} nodes embedded")
+    vectors = embed_batch(texts)
+
+    for index, (eid, vec, txt) in enumerate(zip(eids, vectors, texts), start=1):
+        db.write(
+            """
+            MATCH (n)
+            WHERE elementId(n) = $eid
+            SET n.embedding = $vec,
+                n.embedding_text = $txt
+            """,
+            {
+                "eid": eid,
+                "vec": json.dumps(vec),
+                "txt": txt,
+            },
+        )
+
+        if index % 100 == 0:
+            print(f"  Stored {index}/{len(texts)} narrator embeddings...")
+
+    print(f"  ✓ {len(texts)} Narrator nodes embedded")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -100,8 +192,27 @@ def add_embeddings(db: Neo4jConnection) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
-    va, vb = np.array(a), np.array(b)
-    return float(np.dot(va, vb) / (np.linalg.norm(va) * np.linalg.norm(vb) + 1e-9))
+    va = np.array(a)
+    vb = np.array(b)
+
+    return float(
+        np.dot(va, vb) /
+        (np.linalg.norm(va) * np.linalg.norm(vb) + 1e-9)
+    )
+
+
+def _node_display_name(props: dict, label: str) -> str:
+    if label == "Narrator":
+        return narrator_to_text(props)
+
+    return _first_value(
+        props,
+        "name",
+        "title",
+        "auto_id",
+        "id",
+        default=label,
+    )
 
 
 def find_top_nodes(
@@ -111,52 +222,67 @@ def find_top_nodes(
     labels: list[str] | None = None,
 ) -> list[dict]:
     """
-    Embed the question and return the top_k most similar graph nodes.
+    Embed the question and return top_k similar Narrator nodes only.
 
-    Args:
-        question: Natural language question from the user.
-        top_k:    Number of nodes to return.
-        labels:   Restrict search to these labels (None = all labelled nodes).
-
-    Returns:
-        List of dicts with keys: label, name, score, properties.
+    Important:
+    This ignores the labels parameter on purpose.
+    Search must stay on Narrator only.
     """
-    q_vec = client.embeddings.create(input=[question], model=EMBED_MODEL).data[0].embedding
+    q_vec = embed_text(question)
 
-    if labels:
-        filter_clause = " OR ".join(f"n:{lbl}" for lbl in labels)
-        query = f"MATCH (n) WHERE ({filter_clause}) AND n.embedding IS NOT NULL RETURN n, labels(n)[0] AS lbl"
-    else:
-        query = "MATCH (n) WHERE n.embedding IS NOT NULL RETURN n, labels(n)[0] AS lbl"
-
-    rows = db.read(query)
+    rows = db.read("""
+        MATCH (n:Narrator)
+        WHERE n.embedding IS NOT NULL
+        RETURN n, labels(n)[0] AS lbl
+    """)
 
     scored = []
+
     for row in rows:
-        props = row["n"]
-        vec   = json.loads(props.get("embedding", "[]"))
+        props: dict[str, Any] = row["n"]
+
+        try:
+            vec = json.loads(props.get("embedding", "[]"))
+        except Exception:
+            continue
+
         if not vec:
             continue
+
         score = cosine_similarity(q_vec, vec)
-        scored.append({
-            "label":      row["lbl"],
-            "name":       props.get("name") or props.get("title", ""),
-            "score":      score,
-            "properties": props,
-        })
+
+        scored.append(
+            {
+                "label": row["lbl"],
+                "name": _node_display_name(props, row["lbl"]),
+                "score": score,
+                "properties": props,
+            }
+        )
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored[:top_k]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Run directly
+# ─────────────────────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     with Neo4jConnection() as db:
-        print("Computing embeddings for all graph nodes...")
-        add_embeddings(db)
-        print("\n✓ All embeddings stored.")
+        print(f"Using Ollama embeddings model: {EMBED_MODEL}")
+        print("Computing embeddings for Narrator names only...")
 
-        # Quick test
-        print("\nTest search: 'cricket match in colonial India'")
-        results = find_top_nodes("cricket match in colonial India", db, top_k=3)
+        add_embeddings(db, clear_existing=True)
+
+        print("\n✓ Narrator embeddings stored.")
+
+        print("\nTest search: 'أبو هريرة'")
+        results = find_top_nodes("أبو هريرة", db, top_k=5)
+
         for r in results:
-            print(f"  [{r['label']:<15}] {r['name']:<40} score={r['score']:.3f}")
+            print(
+                f"  [{r['label']:<16}] "
+                f"{r['name']:<40} "
+                f"score={r['score']:.3f}"
+            )

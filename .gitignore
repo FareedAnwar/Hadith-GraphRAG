@@ -1,26 +1,59 @@
 # Environment — never commit secrets
 .env
 .env.local
+.env.*.local
 
 # Python
 __pycache__/
 *.py[cod]
 *.pyo
-venv/
-.venv/
+*.pyd
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 dist/
 build/
 
-# Neo4j data volumes (large, local only)
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Local runtime data
+logs/
+*.log
+tmp/
+.cache/
+
+# Neo4j local volumes
 neo4j_data/
+data/databases/
+data/transactions/
 
-# macOS
-.DS_Store
+# Ollama local volume/cache if mounted locally
+ollama_data/
 
-# IDE
-.vscode/
-.idea/
+# Optional vector stores / experiments
+chroma_store/
+faiss_index/
+*.index
+
+# Streamlit
+.streamlit/secrets.toml
 
 # Jupyter
 .ipynb_checkpoints/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Keep examples/templates
+!.env.example
+
