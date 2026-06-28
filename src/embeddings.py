@@ -101,9 +101,8 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
     return vectors
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Store Narrator Embeddings
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────
 
 def clear_existing_embeddings(db: Neo4jConnection) -> None:
     """
@@ -187,9 +186,8 @@ def add_embeddings(db: Neo4jConnection, clear_existing: bool = True) -> None:
     print(f"  ✓ {len(texts)} Narrator nodes embedded")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Similarity Search
-# ─────────────────────────────────────────────────────────────────────────────
+
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     va = np.array(a)
@@ -264,9 +262,7 @@ def find_top_nodes(
     return scored[:top_k]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Run directly
-# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     with Neo4jConnection() as db:
