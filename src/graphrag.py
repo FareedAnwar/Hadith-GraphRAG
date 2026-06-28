@@ -24,9 +24,7 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip(
 OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "qwen2.5:3b")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _validate_label(label: str) -> str:
     """Allow only safe Neo4j label names because labels cannot be parameterised."""
@@ -71,9 +69,7 @@ def _hadith_text(h: dict) -> str:
     return text
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STAGE 2: Graph Traversal
-# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 2= Graph Traversal
 
 def retrieve_narrator_hadith_context(
     narrator_name: str,
@@ -229,9 +225,7 @@ def retrieve_subgraph(
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STAGE 3: Context Assembly
-# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 3= Context Assembly
 
 def _center_name(center: dict, label: str) -> str:
     for key in (
@@ -408,9 +402,7 @@ def subgraph_to_context(subgraph: dict) -> str:
     return _format_generic_context(subgraph)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STAGE 4: LLM Answer Generation using Ollama Qwen
-# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 4= LLM Answer Generation using Ollama Qwen
 
 SYSTEM_PROMPT = """You are a careful assistant for a Hadith knowledge graph system.
 
@@ -478,9 +470,7 @@ Rules:
     return data["message"]["content"].strip()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # FULL PIPELINE
-# ─────────────────────────────────────────────────────────────────────────────
 
 def graphrag_answer(
     question: str,
@@ -549,9 +539,7 @@ def graphrag_answer(
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # QUICK TEST
-# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     questions = [
